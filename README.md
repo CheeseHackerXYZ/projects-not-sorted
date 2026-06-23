@@ -3,3 +3,6 @@
 
 # pixcel-art-editor-1024.html
 <p>1024*1024のピクセルアートを描ける。すでにある画像をベースにして書くこともできブラウザローカル保存も可能。png画像に書き出せる。</p>
+
+# developing/editor.html
+<p>[開発中]Editor</p>
