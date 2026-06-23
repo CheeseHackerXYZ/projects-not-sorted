@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Vatreon7 | For Territorial.io</title>
+
+<style>
+body { font-family: sans-serif; margin: 20px; background:#f4f6f8; }
+h2 { margin-top:30px; }
+input, select, button { margin: 5px; padding:5px; }
+button { cursor:pointer; }
+form {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 30px;
+  align-items: start;
+  max-width: 1000px;
+}
+.radio-group {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 10px;
+}
+.radio-group label {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  margin: 0;
+}
+table { border-collapse: collapse; margin-top: 10px; width: 100%; max-width: 900px; background:white;}
+th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+th { background:#eee; }
+.statBox { margin-top:15px; padding:10px; background:white; max-width:900px; }
+.highlight { color:green; font-weight:bold; font-size:18px; }
+.danger { background:#d9534f; color:white; }
+.small { font-size:13px; color:#555; }
+
+/* 追加ボタンを右カラム全幅に大きく */
+form .submit-button {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  margin-top: 15px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+}
+form .submit-button:hover {
+  background-color: #45a049;
+}
+
+/* スマホ対応 */
+@media (max-width: 600px) {
+  form {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+<body>
+
+<h1>戦績分析ツール</h1>
+
+<h2>データ追加</h2>
+<form id="inputForm">
+
+<!-- 左側: マップ選択 -->
+<div>
+<strong>地図</strong>
+<div id="mapOptions" class="radio-group"></div>
+</div>
+
+<!-- 右側: 入力フォーム -->
+<div>
+  <div><strong>人数</strong><br>
+    <input type="number" id="players" required></div>
+
+  <div><strong>チーム数</strong><br>
+    <input type="number" id="teams" required></div>
+
+  <div><strong>獲得ポイント</strong><br>
+    <input type="number" id="points" step="0.01" min="0.00" required></div>
+
+  <div><strong>結果</strong><br>
+    <label><input type="radio" name="result" value="win" checked> 勝利</label>
+    <label><input type="radio" name="result" value="draw"> 引き分け</label>
+    <label><input type="radio" name="result" value="lose"> 敗北</label>
+  </div>
+
+  <!-- 追加ボタン -->
+  <div>
+    <button type="button" class="submit-button" onclick="addRecord()">追加</button>
+  </div>
+</div>
+
+</form>
+
+<hr>
+
+<h2>ランキング / 分析</h2>
+<button onclick="showRanking('map')">Map別 勝率</button>
+<button onclick="showRanking('players')">人数別 勝率</button>
+<button onclick="showRanking('teams')">チーム数別 勝率</button>
+<button onclick="showBestMap()">おすすめMap</button>
+<button onclick="showRecentStats()">直近10戦分析</button>
+<button onclick="showTodayPoints()">今日のポイント</button>
+<button onclick="showDailyTrend()">日別ポイント推移</button>
+
+<div id="output" class="statBox"></div>
+
+<hr>
+
+<h2>全データ</h2>
+<button class="danger" onclick="clearData()">全データ削除</button>
+<div id="dataTable"></div>
+
+<script>
+const maps = [
+"ブラックアリーナ","ホワイトアリーナ","島","山1/山2","砂漠","沼地",
+"ホワイトプレーンズ","崖/ハロー","池","島の王国",
+"ヨーロッパ","世界1","世界2","コーカサス","アフリカ",
+"中東","スカンジナビア","北アメリカ","南アメリカ",
+"アジア","オーストラリア","イギリス"
+];
+
+let records = JSON.parse(localStorage.getItem("records")) || [];
+
+function formatDate(timestamp){
+const d = new Date(timestamp);
+return ("0"+(d.getMonth()+1)).slice(-2) + "/" +
+("0"+d.getDate()).slice(-2);
+}
+
+function init() {
+initMapRadios();
+renderDataTable();
+}
+init();
+
+function initMapRadios() {
+const mapDiv = document.getElementById("mapOptions");
+maps.forEach((m,i)=>{
+const label=document.createElement("label");
+label.innerHTML=`<input type="radio" name="map" value="${m}" ${i===0?"checked":""}> ${m}`;
+mapDiv.appendChild(label);
+});
+}
+
+// 追加処理
+function addRecord(){
+  if(!confirm("このデータを追加しますか？")) return;
+
+  const map = document.querySelector("input[name='map']:checked").value;
+  let players = parseInt(document.getElementById("players").value);
+  const teams = parseInt(document.getElementById("teams").value);
+  let points = parseFloat(document.getElementById("points").value);
+  const result = document.querySelector("input[name='result']:checked").value;
+
+  //丸める
+  function round37(n) {
+    const remainder = n % 10;
+    const base = n - remainder;
+
+    if (remainder <= 2) return base;       // 1の位 0~2 → 下の10の位に丸め
+    if (remainder <= 7) return base + 5;   // 1の位 3~7 → 5 に丸め
+    return base + 10;                       // 1の位 8~9 → 次の10に丸め
+}
+  players = round37(players);
+
+
+  // 条件チェック
+  if(isNaN(players) || players < 0 || players > 512){
+    alert("人数は0以上512以下で入力してください。");
+    return;
+  }
+  if(isNaN(teams) || teams < 2 || teams > 8){
+    alert("チーム数は2以上8以下で入力してください。");
+    return;
+  }
+  if(result === "win" && (isNaN(points) || points < 0)){
+    alert("勝利時はポイント0.00以上を入力してください。");
+    return;
+  }
+
+  // 敗北・引き分けはポイント自動0.00
+  if(result === "lose" || result === "draw") points = 0.00;
+
+  // 記録追加
+  records.push({map, players, teams, result, points, date: Date.now()});
+  localStorage.setItem("records", JSON.stringify(records));
+  renderDataTable();
+
+  // フォームリセット
+  document.getElementById("inputForm").reset();
+  document.querySelector("input[name='map']").checked = true;
+  document.querySelector("input[name='result']").checked = true;
+}
+function calcWinRate(data){
+const wins=data.filter(r=>r.result==="win").length;
+const total=data.length;
+if(total===0) return null;
+const rate=(wins/total*100).toFixed(1);
+return {rate,total,wins};
+}
+
+function showRanking(type){
+let grouped={};
+records.forEach(r=>{
+if(!grouped[r[type]]) grouped[r[type]]=[];
+grouped[r[type]].push(r);
+});
+
+let html="<h3>"+type+"別 勝率ランキング</h3><table><tr><th>"+type+"</th><th>勝率</th></tr>";
+
+Object.entries(grouped)
+.map(([key,arr])=>[key,calcWinRate(arr)])
+.sort((a,b)=>(b[1]?.rate||0)-(a[1]?.rate||0))
+.forEach(([key,stat])=>{
+if(!stat) return;
+html+=`<tr><td>${key}</td><td>${stat.rate}% (${stat.total}戦${stat.wins}勝)</td></tr>`;
+});
+
+html+="</table>";
+output.innerHTML=html;
+}
+
+function showBestMap(){
+let grouped={};
+records.forEach(r=>{
+if(!grouped[r.map]) grouped[r.map]=[];
+grouped[r.map].push(r);
+});
+
+let best=null;
+let bestRate=0;
+
+Object.entries(grouped).forEach(([map,data])=>{
+const stat=calcWinRate(data);
+if(stat && stat.rate>bestRate){
+bestRate=stat.rate;
+best={map,...stat};
+}
+});
+
+if(best){
+output.innerHTML=
+`<h3>🔥 おすすめMap</h3>
+<p class="highlight">${best.map}</p>
+<p>勝率 ${best.rate}% (${best.total}戦${best.wins}勝)</p>`;
+}
+}
+
+function showRecentStats(){
+const recent=records.slice(-10);
+const stat=calcWinRate(recent);
+if(!stat){
+output.innerHTML="<p>データ不足</p>";
+return;
+}
+output.innerHTML=
+`<h3>直近10戦</h3>
+<p>勝率 ${stat.rate}% (${stat.total}戦${stat.wins}勝)</p>`;
+}
+
+function showTodayPoints(){
+const today=formatDate(Date.now());
+const todayData=records.filter(r=>formatDate(r.date)===today);
+const total=todayData.reduce((sum,r)=>sum+r.points,0);
+
+output.innerHTML=
+`<h3>今日の獲得ポイント</h3>
+<p class="highlight">${total.toFixed(2)} pt</p>
+<p>${todayData.length}戦</p>`;
+}
+
+function showDailyTrend(){
+let grouped={};
+records.forEach(r=>{
+const date=formatDate(r.date);
+if(!grouped[date]) grouped[date]=0;
+grouped[date]+=r.points;
+});
+
+let html="<h3>日別ポイント推移</h3><table><tr><th>日付</th><th>合計ポイント</th></tr>";
+
+Object.entries(grouped)
+.sort((a,b)=>{
+const [m1,d1]=a[0].split("/");
+const [m2,d2]=b[0].split("/");
+return new Date(2024,m1-1,d1)-new Date(2024,m2-1,d2);
+})
+.forEach(([date,total])=>{
+html+=`<tr><td>${date}</td><td>${total.toFixed(2)} pt</td></tr>`;
+});
+
+html+="</table>";
+output.innerHTML=html;
+}
+
+function renderDataTable(){
+if(records.length===0){
+dataTable.innerHTML="<p>データなし</p>";
+return;
+}
+
+let html="<table><tr><th>#</th><th>日付</th><th>地図</th><th>人数</th><th>チーム</th><th>結果</th><th>ポイント</th><th>削除</th></tr>";
+
+records.forEach((r,i)=>{
+html+=`<tr>
+<td>${i+1}</td>
+<td>${formatDate(r.date)}</td>
+<td>${r.map}</td>
+<td>${r.players}</td>
+<td>${r.teams}</td>
+<td>${r.result}</td>
+<td>${r.points.toFixed(2)}</td>
+<td><button onclick="deleteRecord(${i})">削除</button></td>
+</tr>`;
+});
+
+html+="</table>";
+dataTable.innerHTML=html;
+}
+
+// 削除時確認
+function deleteRecord(index){
+if(!confirm("このデータを削除しますか？")) return;
+records.splice(index,1);
+localStorage.setItem("records",JSON.stringify(records));
+renderDataTable();
+}
+
+// 全データ削除時確認
+function clearData(){
+if(confirm("全データ削除しますか？")){
+records=[];
+localStorage.removeItem("records");
+renderDataTable();
+output.innerHTML="";
+}
+}
+</script>
+
+</body>
+</html>
