@@ -12,3 +12,6 @@
 
 # tilebattle-io.html
 <p>GAME:TILEBATTLE.IO</p>
+
+# onlyJA/battle-record-territorial-io.html
+<p>Vatreon7</p>
