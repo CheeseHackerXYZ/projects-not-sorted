@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ピッチ検出カラオケマシーン (厳密先読みスクロール)</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #121214;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: #1e1e24;
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            text-align: center;
+            width: 800px;
+        }
+        h1 {
+            font-size: 22px;
+            margin: 0 0 15px 0;
+            color: #00d2ff;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        button {
+            flex: 1;
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #startBtn { background-color: #00b4d8; color: white; }
+        #startBtn:hover { background-color: #0096c7; }
+        #stopBtn { background-color: #ef476f; color: white; }
+        #stopBtn:hover { background-color: #d93d5f; }
+        
+        .score-panel {
+            display: flex;
+            justify-content: space-between;
+            background: #2a2a35;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .score-value {
+            font-weight: bold;
+            color: #ffd166;
+        }
+        .live-info {
+            color: #06d6a0;
+            font-weight: bold;
+        }
+        canvas {
+            background-color: #0d0d11;
+            border: 2px solid #3a3a4a;
+            border-radius: 8px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🎤 カラオケマシーン (厳密先読みスクロール)</h1>
+    
+    <div class="controls">
+        <button id="startBtn">カラオケスタート！</button>
+        <button id="stopBtn">ストップ</button>
+    </div>
+
+    <div class="score-panel">
+        <div>現在の音名: <span id="noteDisplay" class="live-info">--</span> (<span id="freqDisplay">-- Hz</span>)</div>
+        <div>スコア: <span id="scoreDisplay" class="score-value">0</span> 点</div>
+    </div>
+
+    <canvas id="karaokeCanvas" width="760" height="500"></canvas>
+</div>
+
+<script>
+    open(location.href)
+// ==========================================
+// 🎵 楽曲データ（BPMとメロディ）
+// ==========================================
+let tempo = 120; 
+
+// 64分音符基準 (4分音符=16ステップ, 16分音符X=4ステップ)
+const targetMelody = [
+    { start: 32, length: 16, note: 60 },  // C4
+    { start: 64, length: 16, note: 64 },  // E4
+    { start: 96, length: 16, note: 67 },  // G4
+    { start: 128, length: 16, note: 76 }, // E5 (一気に上がる)
+    { start: 160, length: 32, note: 80 }, // Ab5
+    { start: 224, length: 16, note: 36 }, // C3 (一気に下がる)
+    { start: 256, length: 32, note: 72 }  // C2
+];
+
+// ==========================================
+// 🎹 音域に関する定数と動的変数
+// ==========================================
+const ABSOLUTE_MIN_NOTE = 33; // 絶対下限 A1
+const VIEW_RANGE = 24;        // 表示範囲（2オクターブ＝24半音）
+
+let currentCenterNote = targetMelody.length > 0 ? targetMelody[0].note : 60;
+let targetCenterNote = currentCenterNote;
+
+// ==========================================
+// システム変数 (1ステップ＝64分音符)
+// ==========================================
+const interval64th = (60000 / tempo) / 16; 
+const STEP_PER_X = 4; // 16分音符(X)は4ステップ
+
+let audioCtx = null;
+let analyser = null;
+let stream = null;
+let isPlaying = false;
+const bufLength = 2048;
+const buffer = new Float32Array(bufLength);
+const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+let synthOsc = null;
+let synthGain = null;
+
+const canvas = document.getElementById('karaokeCanvas');
+const ctx = canvas.getContext('2d');
+const stepWidth = 6; 
+
+let currentStep = 0;       
+let lastStepTime = 0;
+let currentFreq = -1;
+let totalScore = 0;        
+let hitCount = 0;          
+
+const judgeStepOffset = Math.floor((canvas.width * 0.25) / stepWidth);
+const judgeLineX = judgeStepOffset * stepWidth;
+
+const maxHistorySteps = judgeStepOffset + 1; 
+let userPitchHistory = new Array(maxHistorySteps).fill(-1); 
+
+drawLoop();
+
+// ==========================================
+// イベントリスナー
+// ==========================================
+document.getElementById('startBtn').addEventListener('click', async () => {
+    if (isPlaying) return;
+
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = bufLength;
+        
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        initSynth();
+
+        isPlaying = true;
+        currentStep = 0;
+        totalScore = 0;
+        hitCount = 0;
+        userPitchHistory.fill(-1);
+        
+        currentCenterNote = targetMelody.length > 0 ? targetMelody[0].note : 60;
+        targetCenterNote = currentCenterNote;
+
+        document.getElementById('scoreDisplay').textContent = "0";
+        lastStepTime = performance.now();
+        updatePitch();
+    } catch (err) {
+        alert('マイクのアクセスに失敗しました: ' + err.message);
+    }
+});
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+    stopAll();
+});
+
+function stopAll() {
+    isPlaying = false;
+    if (synthOsc) { try { synthOsc.stop(); } catch(e){} }
+    if (audioCtx) audioCtx.close();
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    
+    document.getElementById('noteDisplay').textContent = '--';
+    document.getElementById('freqDisplay').textContent = '-- Hz';
+}
+
+function initSynth() {
+    synthOsc = audioCtx.createOscillator();
+    synthGain = audioCtx.createGain();
+    synthOsc.type = 'sine'; 
+    synthGain.gain.setValueAtTime(0, audioCtx.currentTime); 
+    synthOsc.connect(synthGain);
+    synthGain.connect(audioCtx.destination); 
+    synthOsc.start();
+}
+
+// ==========================================
+// メインループ
+// ==========================================
+function updatePitch() {
+    if (!isPlaying) return;
+
+    analyser.getFloatTimeDomainData(buffer);
+    const acNode = autoCorrelate(buffer, audioCtx.sampleRate);
+    
+    if (acNode === -1) {
+        currentFreq = -1;
+        document.getElementById('noteDisplay').textContent = "--";
+        document.getElementById('freqDisplay').textContent = "-- Hz";
+    } else {
+        currentFreq = acNode;
+        document.getElementById('freqDisplay').textContent = currentFreq.toFixed(1) + " Hz";
+        document.getElementById('noteDisplay').textContent = freqToNote(currentFreq);
+    }
+
+    const now = performance.now();
+    const elapsed = now - lastStepTime;
+
+    if (elapsed >= interval64th) {
+        const stepsToAdvance = Math.floor(elapsed / interval64th);
+        
+        for (let s = 0; s < stepsToAdvance; s++) {
+            currentStep++;
+
+            let userNote = -1;
+            if (currentFreq !== -1) {
+                userNote = 12 * (Math.log(currentFreq / 440) / Math.log(2)) + 69;
+            }
+            
+            userPitchHistory.shift();
+            userPitchHistory.push(userNote);
+
+            // 🔍 【動的スクロール新ロジック】
+            // 常に「4X後」（＝16ステップ先）を見て音符を検出する
+            const lookAheadStep = currentStep + (4 * STEP_PER_X);
+            const detectedNote = targetMelody.find(m => m.start === lookAheadStep);
+            
+            if (detectedNote) {
+                // 検出された時点で、その音符が鳴る「3X前」（＝12ステップ前）に
+                // 余白が4半音になるような目標中心位置を設定する
+                const currentTargetMax = targetCenterNote + (VIEW_RANGE / 2);
+                const currentTargetMin = targetCenterNote - (VIEW_RANGE / 2);
+
+                if (currentTargetMax - detectedNote.note < 4) {
+                    targetCenterNote = detectedNote.note + 4 - (VIEW_RANGE / 2);
+                } else if (detectedNote.note - currentTargetMin < 4) {
+                    targetCenterNote = detectedNote.note - 4 + (VIEW_RANGE / 2);
+                }
+
+                if (targetCenterNote - (VIEW_RANGE / 2) < ABSOLUTE_MIN_NOTE) {
+                    targetCenterNote = ABSOLUTE_MIN_NOTE + (VIEW_RANGE / 2);
+                }
+            }
+
+            // ガイド音と採点
+            const activeTarget = targetMelody.find(m => currentStep >= m.start && currentStep < (m.start + m.length));
+            if (activeTarget) {
+                const targetFreq = 440 * Math.pow(2, (activeTarget.note - 69) / 12);
+                synthOsc.frequency.setValueAtTime(targetFreq, audioCtx.currentTime);
+                synthGain.gain.setValueAtTime(0.15, audioCtx.currentTime); 
+
+                hitCount++;
+                if (userNote !== -1) {
+                    const noteDiff = Math.abs(userNote - activeTarget.note);
+                    if (noteDiff < 0.5) totalScore += 100;
+                    else if (noteDiff < 1.5) totalScore += 50;
+                }
+                document.getElementById('scoreDisplay').textContent = Math.round(totalScore / hitCount);
+            } else {
+                synthGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            }
+        }
+        lastStepTime = now - (elapsed % interval64th);
+    }
+
+    // 🏃 【滑らかなスライドのタイミング制御】
+    // 3X前から動き出し、1X前(音符が鳴る4ステップ前)には完全に終了させる
+    // 1フレームあたりの移動割合を調整（0.25）し、残り4ステップの時点でほぼ目標値に到達するようにします
+    currentCenterNote += (targetCenterNote - currentCenterNote) * 0.25;
+
+    drawLoop();
+    requestAnimationFrame(updatePitch);
+}
+
+// ==========================================
+// 🎨 画面描画処理
+// ==========================================
+function drawLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const minVisibleNote = currentCenterNote - (VIEW_RANGE / 2);
+    const maxVisibleNote = currentCenterNote + (VIEW_RANGE / 2);
+
+    ctx.lineWidth = 1;
+    ctx.font = '11px Arial';
+    
+    const startLoop = Math.floor(minVisibleNote);
+    const endLoop = Math.ceil(maxVisibleNote);
+
+    for (let note = startLoop; note <= endLoop; note++) {
+        if (note < ABSOLUTE_MIN_NOTE) continue;
+        
+        const noteMod = ((note % 12) + 12) % 12;
+        if (noteMod === 0 || noteMod === 9 || note === Math.round(minVisibleNote) || note === Math.round(maxVisibleNote)) {
+            const y = noteToY(note, minVisibleNote, maxVisibleNote);
+            
+            if (note === Math.round(minVisibleNote) || note === Math.round(maxVisibleNote)) {
+                ctx.strokeStyle = '#44445a';
+                ctx.fillStyle = '#aaa';
+            } else {
+                ctx.strokeStyle = '#22222e';
+                ctx.fillStyle = '#555566';
+            }
+            
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+            
+            const octave = Math.floor(note / 12) - 1;
+            const label = noteNames[noteMod] + octave;
+            ctx.fillText(label, 10, y - 4);
+        }
+    }
+
+    // お手本ノート（青い箱）
+    targetMelody.forEach(note => {
+        const relativeStart = note.start - currentStep + judgeStepOffset;
+        const x = relativeStart * stepWidth;
+        const width = note.length * stepWidth;
+        const y = noteToY(note.note, minVisibleNote, maxVisibleNote) - 10; 
+        const height = 20; 
+
+        if (x + width > 0 && x < canvas.width) {
+            ctx.fillStyle = 'rgba(0, 210, 255, 0.25)';
+            ctx.strokeStyle = '#00d2ff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.roundRect(x, y, width, height, 4);
+            ctx.fill();
+            ctx.stroke();
+        }
+    });
+
+    // 判定バー（縦の点線）
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(judgeLineX, 0);
+    ctx.lineTo(judgeLineX, canvas.height);
+    ctx.stroke();
+    ctx.setLineDash([]); 
+
+    // ユーザーの声の軌跡
+    ctx.fillStyle = '#ef476f'; 
+    for (let i = 0; i < userPitchHistory.length; i++) {
+        const userNote = userPitchHistory[i];
+        if (userNote === -1) continue;
+
+        const x = judgeLineX - ((userPitchHistory.length - 1 - i) * stepWidth);
+        const y = noteToY(userNote, minVisibleNote, maxVisibleNote);
+
+        if (y < 0 || y > canvas.height) continue;
+
+        const ratio = i / userPitchHistory.length;
+        ctx.beginPath();
+        ctx.arc(x, y, 3 + (ratio * 2), 0, Math.PI * 2); 
+        ctx.fill();
+    }
+}
+
+function noteToY(noteNum, minNote, maxNote) {
+    const percent = (noteNum - minNote) / (maxNote - minNote);
+    return canvas.height - (percent * (canvas.height - 40)) - 20; 
+}
+
+// ==========================================
+// ピッチ検出（自己相関法）
+// ==========================================
+function autoCorrelate(buffer, sampleRate) {
+    let rms = 0;
+    for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
+    rms = Math.sqrt(rms / buffer.length);
+    if (rms < 0.015) return -1; 
+
+    let r1 = 0, r2 = buffer.length - 1, thres = 0.2;
+    for (let i = 0; i < buffer.length / 2; i++) { if (Math.abs(buffer[i]) < thres) { r1 = i; break; } }
+    for (let i = buffer.length - 1; i >= buffer.length / 2; i--) { if (Math.abs(buffer[i]) < thres) { r2 = i; break; } }
+    const slicedBuffer = buffer.subarray(r1, r2);
+
+    const c = new Float32Array(slicedBuffer.length);
+    for (let i = 0; i < slicedBuffer.length; i++) {
+        for (let j = 0; j < slicedBuffer.length - i; j++) {
+            c[i] += slicedBuffer[j] * slicedBuffer[j + i];
+        }
+    }
+
+    let d = 0;
+    while (c[d] > c[d + 1]) d++;
+    let maxval = -1, maxpos = -1;
+    for (let i = d; i < slicedBuffer.length; i++) {
+        if (c[i] > maxval) {
+            maxval = c[i];
+            maxpos = i;
+        }
+    }
+
+    if (maxpos !== -1) return sampleRate / maxpos;
+    return -1;
+}
+
+function freqToNote(frequency) {
+    const noteNum = 12 * (Math.log(frequency / 440) / Math.log(2));
+    const roundedNoteNum = Math.round(noteNum) + 69;
+    if (roundedNoteNum < 0 || roundedNoteNum > 127) return "--";
+    return noteNames[roundedNoteNum % 12] + (Math.floor(roundedNoteNum / 12) - 1);
+}
+</script>
+
+</body>
+</html>
