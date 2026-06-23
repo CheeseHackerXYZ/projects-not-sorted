@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Editor</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #fff;
+      color: #000;
+      font-family: sans-serif;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .editor {
+      display: flex;
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+    .main {
+      width: 70%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #ccc;
+    }
+    .header {
+      height: 60px;
+      padding: 10px 20px;
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      border-bottom: 1px solid #ccc;
+    }
+    
+    button {
+      font-family: sans-serif;
+      font-size: 16px;
+      padding: 8px 16px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background-color: #fff;
+      color: #000;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .canvas-container {
+      flex: 1;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+    .canvas {
+      background-color: #fff;
+      border: 1px solid #ccc;
+      display: block;
+    }
+    
+    /* 右30% 設定画面の調整 */
+    .setting {
+      width: 30%;
+      height: 100%;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    .setting h3 {
+      margin-bottom: 15px;
+      font-size: 18px;
+    }
+    .prop-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    /* ラベル幅を広げ、折り返しを防ぐ */
+    .prop-row label {
+      width: 120px; 
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    /* 入力欄のサイズを小さく固定 */
+    .prop-row input {
+      width: 70px;
+      padding: 5px;
+      font-size: 14px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .prop-row button.apply-btn {
+      background-color: #28a745;
+      color: #fff;
+      border-color: #28a745;
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+
+    /* モーダル共通 */
+    .modal-overlay {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    .modal-content {
+      background-color: #fff;
+      padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+    .modal-inputs {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .modal-inputs input {
+      width: 60px;
+      padding: 5px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .modal-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    
+    button.ok-btn {
+      background-color: #28a745;
+      color: #fff;
+      border-color: #28a745;
+    }
+    button.cancel-btn {
+      background-color: #dc3545;
+      color: #fff;
+      border-color: #dc3545;
+    }
+
+    .shape-list {
+      display: flex;
+      gap: 10px;
+    }
+    .shape-item {
+      width: 60px;
+      height: 60px;
+      background-color: #eee;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .shape-item.selected {
+      box-shadow: 0 0 0 3px #007bff;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="editor" id="editor">
+    <div class="main">
+      <div class="header">
+        <button id="addBtn">追加</button>
+        <button id="aspectBtn">縦横比</button>
+      </div>
+      <div class="canvas-container">
+        <canvas class="canvas" id="canvas"></canvas>
+      </div>
+    </div>
+    
+    <div class="setting" id="settingPanel"></div>
+
+    <div class="modal-overlay" id="aspectModal">
+      <div class="modal-content">
+        <div class="modal-inputs">
+          <label>縦: <input type="number" id="inputHeight" value="1" min="1"></label>
+          <label>横: <input type="number" id="inputWidth" value="1" min="1"></label>
+        </div>
+        <div class="modal-buttons">
+          <button class="cancel-btn" id="aspectCancelBtn">キャンセル</button>
+          <button class="ok-btn" id="aspectOkBtn">決定</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="addModal">
+      <div class="modal-content">
+        <div class="shape-list">
+          <div class="shape-item" data-shape="line">
+            <canvas width="40" height="40" class="shape-thumb"></canvas>
+          </div>
+          <div class="shape-item" data-shape="circle">
+            <canvas width="40" height="40" class="shape-thumb"></canvas>
+          </div>
+          <div class="shape-item" data-shape="square">
+            <canvas width="40" height="40" class="shape-thumb"></canvas>
+          </div>
+          <div class="shape-item" data-shape="triangle">
+            <canvas width="40" height="40" class="shape-thumb"></canvas>
+          </div>
+        </div>
+        <div class="modal-buttons">
+          <button class="cancel-btn" id="addCancelBtn">キャンセル</button>
+          <button class="ok-btn" id="addOkBtn" disabled>決定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const container = canvas.parentElement;
+    
+    const aspectBtn = document.getElementById('aspectBtn');
+    const aspectModal = document.getElementById('aspectModal');
+    const aspectCancelBtn = document.getElementById('aspectCancelBtn');
+    const aspectOkBtn = document.getElementById('aspectOkBtn');
+    const inputWidth = document.getElementById('inputWidth');
+    const inputHeight = document.getElementById('inputHeight');
+
+    const addBtn = document.getElementById('addBtn');
+    const addModal = document.getElementById('addModal');
+    const addCancelBtn = document.getElementById('addCancelBtn');
+    const addOkBtn = document.getElementById('addOkBtn');
+    const shapeItems = document.querySelectorAll('.shape-item');
+    const settingPanel = document.getElementById('settingPanel');
+    
+    let aspectRatio = 1 / 1;
+    let selectedShape = null;
+    
+    const shapes = [];
+    let selectedIndex = null;
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      shapes.forEach((shape, index) => {
+        ctx.save();
+        
+        if (shape.type === 'line') {
+          const x1 = (shape.x1 / 100) * canvas.width;
+          const y1 = (shape.y1 / 100) * canvas.height;
+          const x2 = (shape.x2 / 100) * canvas.width;
+          const y2 = (shape.y2 / 100) * canvas.height;
+          
+          ctx.lineWidth = shape.lineWidth;
+
+          const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+          grad.addColorStop(0, shape.gradStart);
+          grad.addColorStop(1, shape.gradEnd);
+          ctx.strokeStyle = grad;
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = '#000';
+          const cx = (shape.x / 100) * canvas.width;
+          const cy = (shape.y / 100) * canvas.height;
+          const size = (shape.size / 100) * Math.min(canvas.width, canvas.height);
+          
+          if (shape.type === 'circle') {
+            ctx.beginPath();
+            ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (shape.type === 'square') {
+            ctx.fillRect(cx - size / 2, cy - size / 2, size, size);
+          } else if (shape.type === 'triangle') {
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - size / 2);
+            ctx.lineTo(cx - size / 2, cy + size / 2);
+            ctx.lineTo(cx + size / 2, cy + size / 2);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+
+        if (index === selectedIndex) {
+          ctx.strokeStyle = '#007bff';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
+          if (shape.type === 'line') {
+            const x1 = (shape.x1 / 100) * canvas.width;
+            const y1 = (shape.y1 / 100) * canvas.height;
+            const x2 = (shape.x2 / 100) * canvas.width;
+            const y2 = (shape.y2 / 100) * canvas.height;
+            ctx.strokeRect(Math.min(x1, x2) - 5, Math.min(y1, y2) - 5, Math.abs(x2 - x1) + 10, Math.abs(y2 - y1) + 10);
+          } else {
+            const cx = (shape.x / 100) * canvas.width;
+            const cy = (shape.y / 100) * canvas.height;
+            const size = (shape.size / 100) * Math.min(canvas.width, canvas.height);
+            ctx.strokeRect(cx - size / 2 - 5, cy - size / 2 - 5, size + 10, size + 10);
+          }
+        }
+        ctx.restore();
+      });
+    }
+
+    function resizeCanvas() {
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      let targetWidth = containerWidth;
+      let targetHeight = containerWidth / aspectRatio;
+
+      if (targetHeight > containerHeight) {
+        targetHeight = containerHeight;
+        targetWidth = containerHeight * aspectRatio;
+      }
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      canvas.style.width = targetWidth + 'px';
+      canvas.style.height = targetHeight + 'px';
+      draw();
+    }
+
+    function updateSettingPanel() {
+      settingPanel.innerHTML = '';
+      if (selectedIndex === null) return;
+
+      const shape = shapes[selectedIndex];
+      const h3 = document.createElement('h3');
+      h3.textContent = `${shape.type.toUpperCase()} の属性`;
+      settingPanel.appendChild(h3);
+
+      let props = [];
+      if (shape.type === 'line') {
+        props = [
+          { key: 'x1', label: '始点X (%)', type: 'number' },
+          { key: 'y1', label: '始点Y (%)', type: 'number' },
+          { key: 'x2', label: '終点X (%)', type: 'number' },
+          { key: 'y2', label: '終点Y (%)', type: 'number' },
+          { key: 'lineWidth', label: '枠線太さ', type: 'number' },
+          { key: 'gradStart', label: 'グラデ始色', type: 'text' },
+          { key: 'gradEnd', label: 'グラデ終色', type: 'text' },
+          { key: 'gradAngle', label: 'グラデ角度', type: 'number' }
+        ];
+      } else {
+        props = [
+          { key: 'x', label: '中心X (%)', type: 'number' },
+          { key: 'y', label: '中心Y (%)', type: 'number' },
+          { key: 'size', label: 'サイズ (%)', type: 'number' }
+        ];
+      }
+
+      props.forEach(p => {
+        const row = document.createElement('div');
+        row.className = 'prop-row';
+
+        const label = document.createElement('label');
+        label.textContent = p.label;
+
+        const input = document.createElement('input');
+        input.type = p.type;
+        input.value = shape[p.key];
+
+        const btn = document.createElement('button');
+        btn.className = 'apply-btn';
+        btn.textContent = '決定';
+        btn.disabled = true;
+
+        input.addEventListener('input', () => {
+          if (input.value !== String(shape[p.key])) {
+            btn.disabled = false;
+          } else {
+            btn.disabled = true;
+          }
+        });
+
+        btn.addEventListener('click', () => {
+          let val = input.value;
+          if (p.type === 'number') {
+            val = parseFloat(val);
+          }
+          shape[p.key] = val;
+          btn.disabled = true;
+          draw();
+        });
+
+        row.appendChild(label);
+        row.appendChild(input);
+        row.appendChild(btn);
+        settingPanel.appendChild(row);
+      });
+    }
+
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = ((e.clientX - rect.left) / canvas.width) * 100;
+      const clickY = ((e.clientY - rect.top) / canvas.height) * 100;
+
+      let hitIndex = null;
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        const s = shapes[i];
+        if (s.type === 'line') {
+          const minX = Math.min(s.x1, s.x2) - 5;
+          const maxX = Math.max(s.x1, s.x2) + 5;
+          const minY = Math.min(s.y1, s.y2) - 5;
+          const maxY = Math.max(s.y1, s.y2) + 5;
+          if (clickX >= minX && clickX <= maxX && clickY >= minY && clickY <= maxY) {
+            hitIndex = i;
+            break;
+          }
+        } else {
+          const size = s.size;
+          if (clickX >= s.x - size/2 && clickX <= s.x + size/2 && clickY >= s.y - size/2 && clickY <= s.y + size/2) {
+            hitIndex = i;
+            break;
+          }
+        }
+      }
+
+      selectedIndex = hitIndex;
+      updateSettingPanel();
+      draw();
+    });
+
+    aspectBtn.addEventListener('click', () => { aspectModal.style.display = 'flex'; });
+    aspectCancelBtn.addEventListener('click', () => { aspectModal.style.display = 'none'; });
+    aspectOkBtn.addEventListener('click', () => {
+      const w = parseFloat(inputWidth.value);
+      const h = parseFloat(inputHeight.value);
+      if (w > 0 && h > 0) { aspectRatio = w / h; resizeCanvas(); }
+      aspectModal.style.display = 'none';
+    });
+
+    addBtn.addEventListener('click', () => {
+      selectedShape = null;
+      addOkBtn.disabled = true;
+      shapeItems.forEach(i => i.classList.remove('selected'));
+      addModal.style.display = 'flex';
+    });
+    addCancelBtn.addEventListener('click', () => { addModal.style.display = 'none'; });
+
+    shapeItems.forEach(item => {
+      item.addEventListener('click', () => {
+        shapeItems.forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        selectedShape = item.getAttribute('data-shape');
+        addOkBtn.disabled = false;
+      });
+    });
+
+    addOkBtn.addEventListener('click', () => {
+      if (selectedShape) {
+        let newShape = {};
+        if (selectedShape === 'line') {
+          newShape = {
+            type: 'line',
+            x1: 40,
+            y1: 50,
+            x2: 60,
+            y2: 50,
+            lineWidth: 4,
+            gradStart: '#000000',
+            gradEnd: '#ff0000',
+            gradAngle: 0
+          };
+        } else {
+          newShape = {
+            type: selectedShape,
+            x: 50,
+            y: 50,
+            size: 20
+          };
+        }
+        shapes.push(newShape);
+        selectedIndex = shapes.length - 1;
+        updateSettingPanel();
+        draw();
+      }
+      addModal.style.display = 'none';
+    });
+
+    function drawThumbnails() {
+      shapeItems.forEach(item => {
+        const thumbCanvas = item.querySelector('.shape-thumb');
+        const tCtx = thumbCanvas.getContext('2d');
+        const type = item.getAttribute('data-shape');
+        tCtx.clearRect(0, 0, 40, 40);
+        tCtx.fillStyle = '#000'; tCtx.strokeStyle = '#000'; tCtx.lineWidth = 2;
+        if (type === 'line') {
+          tCtx.beginPath(); tCtx.moveTo(5, 20); tCtx.lineTo(35, 20); tCtx.stroke();
+        } else if (type === 'circle') {
+          tCtx.beginPath(); tCtx.arc(20, 20, 12, 0, Math.PI * 2); tCtx.fill();
+        } else if (type === 'square') {
+          tCtx.fillRect(8, 8, 24, 24);
+        } else if (type === 'triangle') {
+          tCtx.beginPath(); tCtx.moveTo(20, 6); tCtx.lineTo(6, 32); tCtx.lineTo(34, 32); tCtx.closePath(); tCtx.fill();
+        }
+      });
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+    drawThumbnails();
+  </script>
+</body>
+</html>
