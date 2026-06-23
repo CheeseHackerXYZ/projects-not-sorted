@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pixel Art 1024x1024 Editor</title>
+    <style>
+        :root {
+            --bg-color: #090a0f;
+            --panel-color: #11141e;
+            --accent-color: #00f2ff;
+            --accent-glow: #00666b;
+            --text-color: #e2e8f0;
+            --border-color: #2a2f45;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background: var(--panel-color);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 100;
+        }
+
+        h1 {
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #fff;
+            text-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,255,255,0.03);
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        label {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            font-weight: bold;
+        }
+
+        input[type="color"] {
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 4px;
+            cursor: pointer;
+            background: transparent;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background: #1e2235;
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .btn.active {
+            background: var(--accent-color);
+            color: #000;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .btn-upload {
+            background: #1a2e47;
+            border-color: #255080;
+        }
+        .btn-upload:hover {
+            background: #1f3a66;
+        }
+
+        .btn-storage {
+            background: #153a21;
+            border-color: #22c55e;
+        }
+        .btn-storage:hover {
+            background: #166534;
+        }
+
+        #zoom-info {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .main-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background-color: #ffffff;
+            cursor: grab;
+        }
+        
+        .main-container.grabbing {
+            cursor: grabbing;
+        }
+
+        #viewport {
+            position: absolute;
+            width: 1024px;
+            height: 1024px;
+            transform-origin: 0 0;
+            will-change: transform;
+            image-rendering: pixelated;
+        }
+
+        #bg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.5;
+            pointer-events: none;
+            object-fit: fill;
+            z-index: 1;
+        }
+
+        #paint-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            background: transparent;
+        }
+
+        .hint {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: #ccc;
+            pointer-events: none;
+            z-index: 110;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Pixel Art 1024</h1>
+        <div class="toolbar">
+            <div class="control-group">
+                <button class="btn btn-storage" id="btn-save">Save Local</button>
+                <button class="btn btn-storage" id="btn-load">Load Local</button>
+            </div>
+
+            <div class="control-group">
+                <button class="btn" id="tool-pan">Pan</button>
+                <button class="btn active" id="tool-pen">Pen</button>
+                <button class="btn" id="tool-eraser">Eraser</button>
+            </div>
+
+            <div class="control-group">
+                <label for="color-picker">Color</label>
+                <input type="color" id="color-picker" value="#00f2ff">
+            </div>
+
+            <button class="btn btn-upload" onclick="document.getElementById('image-loader').click()">Trace Image (50%)</button>
+            <input type="file" id="image-loader" accept="image/png, image/jpeg">
+
+            <div class="control-group">
+                <button class="btn" id="btn-zoom-out">－</button>
+                <span id="zoom-info">100%</span>
+                <button class="btn" id="btn-zoom-in">＋</button>
+            </div>
+
+            <button class="btn" id="btn-clear">Clear</button>
+            <button class="btn" id="btn-export" style="background: #0284c7; border-color: #0369a1;">Export PNG</button>
+        </div>
+    </header>
+
+    <div class="main-container" id="container">
+        <div id="viewport">
+            <img id="bg-layer" alt="Background Guide" style="display: none;">
+            <canvas id="paint-canvas" width="1024" height="1024"></canvas>
+        </div>
+    </div>
+    
+    <div class="hint">PC: Scroll wheel to Zoom, Space+Drag to Pan / iPad: Pinch to Zoom, 2-Finger Drag to Pan</div>
+
+    <script>
+        const container = document.getElementById('container');
+        const viewport = document.getElementById('viewport');
+        const canvas = document.getElementById('paint-canvas');
+        const ctx = canvas.getContext('2d');
+        const bgLayer = document.getElementById('bg-layer');
+        const imageLoader = document.getElementById('image-loader');
+        const colorPicker = document.getElementById('color-picker');
+        const zoomInfo = document.getElementById('zoom-info');
+        
+        const btnSave = document.getElementById('btn-save');
+        const btnLoad = document.getElementById('btn-load');
+
+        const tools = {
+            pan: document.getElementById('tool-pan'),
+            pen: document.getElementById('tool-pen'),
+            eraser: document.getElementById('tool-eraser')
+        };
+
+        const CANVAS_SIZE = 1024;
+        const STORAGE_KEY = 'pixel_art_1024_save';
+        
+        let state = {
+            currentTool: 'pen',
+            isDrawing: false,
+            isPanning: false,
+            scale: 1,
+            pointX: 0, pointY: 0, startX: 0, startY: 0,
+            lastX: null, lastY: null,
+            prevDiff: -1
+        };
+
+        // Center canvas on load
+        window.addEventListener('load', () => {
+            const rect = container.getBoundingClientRect();
+            state.scale = Math.min(rect.width, rect.height) / CANVAS_SIZE * 0.9;
+            state.pointX = (rect.width - CANVAS_SIZE * state.scale) / 2;
+            state.pointY = (rect.height - CANVAS_SIZE * state.scale) / 2;
+            updateTransform();
+
+            if (localStorage.getItem(STORAGE_KEY)) {
+                loadFromStorage(false);
+            } else {
+                ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+            }
+        });
+
+        // Switch Tools
+        Object.keys(tools).forEach(key => {
+            tools[key].addEventListener('click', () => {
+                state.currentTool = key;
+                Object.values(tools).forEach(b => b.classList.remove('active'));
+                tools[key].classList.add('active');
+            });
+        });
+
+        // Load background image & optionally fill canvas
+        imageLoader.addEventListener('change', (e) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                bgLayer.src = event.target.result;
+                bgLayer.style.display = 'block';
+
+                const img = new Image();
+                img.onload = () => {
+                    if(confirm("Would you like to overwrite and fill the canvas using this image as your starting layout?")) {
+                        ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                        ctx.globalCompositeOperation = 'source-over';
+                        ctx.drawImage(img, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                    }
+                };
+                img.src = event.target.result;
+            }
+            if(e.target.files[0]) reader.readAsDataURL(e.target.files[0]);
+        });
+
+        // Get coordinates relative to canvas grid
+        function getCanvasCoords(clientX, clientY) {
+            const rect = container.getBoundingClientRect();
+            const mouseX = clientX - rect.left;
+            const mouseY = clientY - rect.top;
+            const x = Math.floor((mouseX - state.pointX) / state.scale);
+            const y = Math.floor((mouseY - state.pointY) / state.scale);
+            return { x, y };
+        }
+
+        // Apply transformations
+        function updateTransform() {
+            viewport.style.transform = `translate(${state.pointX}px, ${state.pointY}px) scale(${state.scale})`;
+            zoomInfo.textContent = `${Math.round(state.scale * 100)}%`;
+        }
+
+        // Line interpolation (Bresenham's algorithm)
+        function drawLine(x0, y0, x1, y1) {
+            if (state.currentTool === 'eraser') {
+                ctx.globalCompositeOperation = 'destination-out';
+            } else {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = colorPicker.value;
+            }
+            
+            const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+            const sx = (x0 < x1) ? 1 : -1, sy = (y0 < y1) ? 1 : -1;
+            let err = dx - dy;
+
+            while (true) {
+                ctx.fillRect(x0, y0, 1, 1);
+                if ((x0 === x1) && (y0 === y1)) break;
+                const e2 = 2 * err;
+                if (e2 > -dy) { err -= dy; x0 += sx; }
+                if (e2 < dx) { err += dx; y0 += sy; }
+            }
+        }
+
+        // Local Storage: Save
+        btnSave.addEventListener('click', () => {
+            try {
+                ctx.globalCompositeOperation = 'source-over';
+                const dataURL = canvas.toDataURL('image/png');
+                localStorage.setItem(STORAGE_KEY, dataURL);
+                
+                const originalText = btnSave.textContent;
+                btnSave.textContent = 'Saved!';
+                btnSave.style.background = '#15803d';
+                setTimeout(() => {
+                    btnSave.textContent = originalText;
+                    btnSave.style.background = '';
+                }, 1000);
+            } catch (e) {
+                alert('Failed to save data locally.');
+            }
+        });
+
+        // Local Storage: Load
+        function loadFromStorage(confirmRequired = true) {
+            const dataURL = localStorage.getItem(STORAGE_KEY);
+            if (!dataURL) {
+                if (confirmRequired) alert('No saved data found.');
+                return;
+            }
+            if (confirmRequired && !confirm('Load your saved project from browser storage? This will overwrite your current progress.')) return;
+
+            const img = new Image();
+            img.onload = () => {
+                ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = dataURL;
+        }
+
+        btnLoad.addEventListener('click', () => loadFromStorage(true));
+
+        // Mouse Wheel Zoom
+        container.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = container.getBoundingClientRect();
+            const xs = (e.clientX - rect.left - state.pointX) / state.scale;
+            const ys = (e.clientY - rect.top - state.pointY) / state.scale;
+            const delta = -e.deltaY;
+            let newScale = state.scale * (delta > 0 ? 1.1 : 0.9);
+            newScale = Math.max(0.1, Math.min(40, newScale));
+            state.pointX = e.clientX - rect.left - xs * newScale;
+            state.pointY = e.clientY - rect.top - ys * newScale;
+            state.scale = newScale;
+            updateTransform();
+        }, { passive: false });
+
+        // Mouse Down Actions
+        container.addEventListener('mousedown', (e) => {
+            if (e.code === 'Space' || state.currentTool === 'pan' || e.button === 1) {
+                state.isPanning = true;
+                container.classList.add('grabbing');
+                state.startX = e.clientX - state.pointX;
+                state.startY = e.clientY - state.pointY;
+                return;
+            }
+            if (state.currentTool === 'pen' || state.currentTool === 'eraser') {
+                state.isDrawing = true;
+                const coords = getCanvasCoords(e.clientX, e.clientY);
+                state.lastX = coords.x; state.lastY = coords.y;
+                ctx.globalCompositeOperation = state.currentTool === 'eraser' ? 'destination-out' : 'source-over';
+                ctx.fillStyle = colorPicker.value;
+                ctx.fillRect(coords.x, coords.y, 1, 1);
+            }
+        });
+
+        // Mouse Move Actions
+        window.addEventListener('mousemove', (e) => {
+            if (state.isPanning) {
+                state.pointX = e.clientX - state.startX;
+                state.pointY = e.clientY - state.startY;
+                updateTransform();
+            } else if (state.isDrawing) {
+                const coords = getCanvasCoords(e.clientX, e.clientY);
+                drawLine(state.lastX, state.lastY, coords.x, coords.y);
+                state.lastX = coords.x; state.lastY = coords.y;
+            }
+        });
+
+        // Mouse Up
+        window.addEventListener('mouseup', () => {
+            state.isDrawing = false; state.isPanning = false;
+            container.classList.remove('grabbing');
+            state.lastX = null; state.lastY = null;
+        });
+
+        // Spacebar Handlers for Panning Visual Cues
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && state.currentTool !== 'pan') container.classList.add('grabbing');
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') container.classList.remove('grabbing');
+        });
+
+        // Touch Input Handlers (Mobile / iPad support)
+        container.addEventListener('touchstart', (e) => {
+            if (e.targetTouches.length === 2) {
+                state.isDrawing = false; state.isPanning = true;
+                const touch1 = e.targetTouches[0]; const touch2 = e.targetTouches[1];
+                state.startX = ((touch1.clientX + touch2.clientX) / 2) - state.pointX;
+                state.startY = ((touch1.clientY + touch2.clientY) / 2) - state.pointY;
+                state.prevDiff = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
+                e.preventDefault();
+            } else if (e.targetTouches.length === 1 && !state.isPanning) {
+                if (state.currentTool === 'pan') {
+                     state.isPanning = true;
+                     state.startX = e.touches[0].clientX - state.pointX;
+                     state.startY = e.touches[0].clientY - state.pointY;
+                } else {
+                    state.isDrawing = true;
+                    const coords = getCanvasCoords(e.touches[0].clientX, e.touches[0].clientY);
+                    state.lastX = coords.x; state.lastY = coords.y;
+                    ctx.globalCompositeOperation = state.currentTool === 'eraser' ? 'destination-out' : 'source-over';
+                    ctx.fillStyle = colorPicker.value;
+                    ctx.fillRect(coords.x, coords.y, 1, 1);
+                }
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        container.addEventListener('touchmove', (e) => {
+            if (e.targetTouches.length === 2 && state.isPanning) {
+                const touch1 = e.targetTouches[0]; const touch2 = e.targetTouches[1];
+                const clientX = (touch1.clientX + touch2.clientX) / 2;
+                const clientY = (touch1.clientY + touch2.clientY) / 2;
+                const currentDiff = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
+                
+                if (state.prevDiff > 0) {
+                    const rect = container.getBoundingClientRect();
+                    const xs = (clientX - rect.left - state.pointX) / state.scale;
+                    const ys = (clientY - rect.top - state.pointY) / state.scale;
+                    let newScale = state.scale * (currentDiff / state.prevDiff);
+                    newScale = Math.max(0.1, Math.min(40, newScale));
+
+                    state.pointX = clientX - rect.left - xs * newScale;
+                    state.pointY = clientY - rect.top - ys * newScale;
+                    state.scale = newScale;
+                    state.startX = clientX - state.pointX;
+                    state.startY = clientY - state.pointY;
+                }
+                state.prevDiff = currentDiff;
+                state.pointX = clientX - state.startX;
+                state.pointY = clientY - state.startY;
+                updateTransform();
+                e.preventDefault();
+            } else if (e.targetTouches.length === 1) {
+                if (state.isDrawing) {
+                    const coords = getCanvasCoords(e.touches[0].clientX, e.touches[0].clientY);
+                    drawLine(state.lastX, state.lastY, coords.x, coords.y);
+                    state.lastX = coords.x; state.lastY = coords.y;
+                    e.preventDefault();
+                } else if (state.isPanning) {
+                     state.pointX = e.touches[0].clientX - state.startX;
+                     state.pointY = e.touches[0].clientY - state.startY;
+                     updateTransform();
+                     e.preventDefault();
+                }
+            }
+        }, { passive: false });
+
+        window.addEventListener('touchend', (e) => {
+            if (e.targetTouches.length < 2) { state.isPanning = false; state.prevDiff = -1; }
+            if (e.targetTouches.length === 0) { state.isDrawing = false; state.lastX = null; state.lastY = null; }
+        });
+
+        // UI Zoom Buttons
+        document.getElementById('btn-zoom-in').addEventListener('click', () => {
+            state.scale = Math.min(40, state.scale * 1.5); updateTransform();
+        });
+        document.getElementById('btn-zoom-out').addEventListener('click', () => {
+            state.scale = Math.max(0.1, state.scale / 1.5); updateTransform();
+        });
+
+        // Clear Canvas
+        document.getElementById('btn-clear').addEventListener('click', () => {
+            if(confirm("Are you sure you want to completely clear the canvas?")) ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        });
+
+        // Export Canvas to PNG Image file
+        document.getElementById('btn-export').addEventListener('click', () => {
+            ctx.globalCompositeOperation = 'source-over';
+            const dataURL = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = 'pixel-art-1024.png';
+            link.href = dataURL;
+            link.click();
+        });
+    </script>
+</body>
+</html>
