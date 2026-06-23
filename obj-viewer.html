@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>OBJ Viewer</title>
+
+<style>
+html,body{
+    margin:0;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:#111;
+}
+canvas{
+    display:block;
+}
+#fileInput{
+    position:fixed;
+    z-index:10;
+    top:10px;
+    left:10px;
+}
+</style>
+
+<script src="https://unpkg.com/three@0.137.4/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.4/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.4/examples/js/loaders/OBJLoader.js"></script>
+</head>
+
+<body>
+
+<input type="file" id="fileInput" multiple>
+
+<script>
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+    75,
+    innerWidth / innerHeight,
+    0.1,
+    100000
+);
+
+camera.position.set(0, 0, 3000);
+
+const renderer = new THREE.WebGLRenderer({
+    antialias:true
+});
+
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const light1 = new THREE.DirectionalLight(0xffffff, 0);
+light1.position.set(1,1,1);
+scene.add(light1);
+
+const light2 = new THREE.AmbientLight(0xffffff,1.5);
+scene.add(light2);
+
+window.addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
+
+const loader = new THREE.OBJLoader();
+
+document.getElementById("fileInput").addEventListener("change", async (e) => {
+
+    const files = [...e.target.files];
+
+    const objFile = files.find(f => f.name.endsWith(".obj"));
+    const pngFile = files.find(f =>
+        f.name.endsWith(".png") ||
+        f.name.endsWith(".jpg") ||
+        f.name.endsWith(".jpeg") ||
+        f.name.endsWith(".webp")
+    );
+
+    if(!objFile){
+        alert("OBJファイルが必要");
+        return;
+    }
+
+    const objText = await objFile.text();
+
+    const object = loader.parse(objText);
+
+    let texture = null;
+
+    if(pngFile){
+        const texURL = URL.createObjectURL(pngFile);
+        try {
+            texture = await new THREE.TextureLoader().loadAsync(texURL);
+            texture.flipY = true;
+        } catch (error) {
+            console.error("Failed to load the texture:", error);
+        }
+    }
+
+    object.traverse(child => {
+
+        if(child.isMesh){
+
+            child.material = new THREE.MeshStandardMaterial({
+                map:texture || null,
+                color:0xffffff
+            });
+
+            child.castShadow = true;
+            child.receiveShadow = true;
+        }
+
+    });
+
+    scene.add(object);
+
+    const box = new THREE.Box3().setFromObject(object);
+    const center = box.getCenter(new THREE.Vector3());
+
+    // 自動スケール
+    const size = box.getSize(new THREE.Vector3()).length();
+    const scale = 2000 / size;
+
+    object.scale.setScalar(scale);
+
+});
+
+function animate(){
+    requestAnimationFrame(animate);
+
+    controls.update();
+
+    renderer.render(scene,camera);
+}
+
+animate();
+</script>
+
+</body>
+</html>
