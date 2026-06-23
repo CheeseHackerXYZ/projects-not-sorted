@@ -6,3 +6,9 @@
 
 # developing/editor.html
 <p>[開発中]Editor</p>
+
+# developing/karaoke.html
+<p>[開発中]音程検出マシーン</p>
+
+# tilebattle-io.html
+<p>GAME:TILEBATTLE.IO</p>
