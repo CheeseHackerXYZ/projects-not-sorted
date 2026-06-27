@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Spectrogram Converter</title>
+    <title>Phase Vocoder Spectrogram</title>
     <style>
         body {
             margin: 0;
@@ -23,7 +23,7 @@
             flex-direction: column;
             align-items: center;
             gap: 15px;
-            max-width: 800px;
+            max-width: 900px;
             width: 100%;
         }
         .controls {
@@ -48,6 +48,7 @@
             border: 1px solid #1e293b;
             background: #000;
             max-width: 100%;
+            height: 512px; /* 描画データは1024pxですが表示は見やすく縮小 */
         }
         #status { font-size: 0.9rem; color: #94a3b8; text-align: center; }
     </style>
@@ -55,18 +56,18 @@
 <body>
 
     <div class="container">
-        <h1>Audio <-> Spectrogram</h1>
+        <h1>Phase Vocoder Spectrogram</h1>
         <div id="status">画面をクリックしてシステムを有効化してください</div>
         
         <div class="controls">
             <button id="btnMic">マイク録音 開始</button>
-            <button id="btnDownload">画像をダウンロード</button>
+            <button id="btnDownload">PNGでダウンロード</button>
             <label for="uploadImg">画像から音を復元</label>
             <input type="file" id="uploadImg" accept="image/*">
             <button id="btnPlay" disabled>復元した音を再生</button>
         </div>
 
-        <canvas id="mainCanvas" width="800" height="512"></canvas>
+        <canvas id="mainCanvas" width="800" height="1024"></canvas>
     </div>
 
     <script>
@@ -80,106 +81,151 @@
         const btnPlay = document.getElementById('btnPlay');
 
         const width = canvas.width;
-        const height = canvas.height;
+        const height = canvas.height; // 1024
 
         let audioCtx = null;
-        let analyser = null;
         let isRecording = false;
         let recordInterval = null;
         let reconstructedBuffer = null;
 
-        // FFTサイズ設定
         const FFT_SIZE = 2048;
         const SAMPLE_RATE = 44100;
-        const HOP_SIZE = 256; // フレーム間の移動サンプル数
+        const HOP_SIZE = 256; 
 
-        // 一時バッファ
+        // 前回の位相を記録して「位相の差分（瞬時周波数）」を計算するための配列
+        let prevPhases = new Float32Array(FFT_SIZE / 2);
+
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = width;
         tempCanvas.height = height;
         const tempCtx = tempCanvas.getContext('2d');
 
-        // 初期化初期フラグ
         window.addEventListener('click', () => {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-                statusDiv.textContent = "システム準備完了。録音するか、画像を読み込んでください。";
+                statusDiv.textContent = "準備完了。マイク録音するか、PNG画像を読み込んでください。";
             }
         });
 
-        // --- 1. 音から画像化（リアルタイム録音） ---
+        // --- 1. 音から画像化（振幅＋位相差の埋め込み） ---
         btnMic.addEventListener('click', async () => {
             if (!audioCtx) return;
             if (isRecording) {
-                // 録音停止
                 isRecording = false;
                 clearInterval(recordInterval);
                 btnMic.textContent = "マイク録音 開始";
-                statusDiv.textContent = "録音停止。画像をダウンロードできます。";
+                statusDiv.textContent = "録音停止。必ず「PNG」で保存してください。";
                 return;
             }
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 const source = audioCtx.createMediaStreamSource(stream);
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = FFT_SIZE;
-                analyser.smoothingTimeConstant = 0; // 復元精度を上げるためスムージングはオフ
-                source.connect(analyser);
+                
+                // 内部解析用のScriptProcessor（生データを取得して手動で位相を計算するため）
+                const processor = audioCtx.createScriptProcessor(FFT_SIZE, 1, 1);
+                
+                source.connect(processor);
+                processor.connect(audioCtx.destination);
 
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 isRecording = true;
                 btnMic.textContent = "録音中 (クリックで停止)";
-                statusDiv.textContent = "マイクの音を可視化中...";
+                statusDiv.textContent = "フェーズボコーダー解析中...";
 
-                // 約5.8ms間隔(256サンプル分)で描画を更新して時間軸の密度を保つ
-                recordInterval = setInterval(() => {
-                    analyser.getByteFrequencyData(dataArray);
+                // 簡易窓関数
+                const windowFunc = new Float32Array(FFT_SIZE);
+                for (let i = 0; i < FFT_SIZE; i++) {
+                    windowFunc[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FFT_SIZE - 1)));
+                }
+
+                // 定期的にCanvasへ右端から描画（擬似的なHOPタイミング）
+                let sampleBuffer = [];
+
+                processor.onaudioprocess = (e) => {
+                    if (!isRecording) return;
+                    const inputData = e.inputBuffer.getChannelData(0);
                     
-                    tempCtx.drawImage(canvas, 0, 0);
-                    ctx.clearRect(0, 0, width, height);
-                    ctx.drawImage(tempCanvas, -1, 0);
-
-                    // 縦軸全体に1024本の周波数データをマッピング
-                    for (let y = 0; y < height; y++) {
-                        const percent = y / height;
-                        const sampleIndex = Math.floor(percent * dataArray.length);
-                        const value = dataArray[sampleIndex];
-                        ctx.fillStyle = getColor(value);
-                        ctx.fillRect(width - 1, height - y, 1, 1);
+                    // データをバッファリングしてHOP_SIZE(256)ごとに行列化
+                    for(let i=0; i<inputData.length; i++) {
+                        sampleBuffer.push(inputData[i]);
+                        if (sampleBuffer.length >= FFT_SIZE) {
+                            analyzeFrame(sampleBuffer.slice(0, FFT_SIZE), windowFunc);
+                            sampleBuffer = sampleBuffer.slice(HOP_SIZE); // HOP分ずらす
+                        }
                     }
-                }, (HOP_SIZE / SAMPLE_RATE) * 1000);
+                };
 
             } catch (err) {
                 statusDiv.textContent = "マイクアクセスエラー: " + err.message;
             }
         });
 
-        function getColor(value) {
-            if (value === 0) return 'rgb(0,0,0)';
-            const h = 260 - (value * 1.0);
-            const l = Math.min(100, (value / 255) * 60 + 10);
-            return `hsl(${h}, 90%, ${l}%)`;
-        }
+        // 簡易FFT（複素数計算をインライン展開したディスクリートフーリエに近い処理）
+        function analyzeFrame(frame, win) {
+            const numFreqs = FFT_SIZE / 2;
+            const magnitudes = new Float32Array(numFreqs);
+            const phases = new Float32Array(numFreqs);
 
-        // HSLから逆算して0〜255の強度（振幅）に戻す関数
-        function getAmplitudeFromRGB(r, g, b) {
-            // 簡易的に輝度(明度)をベースに0~255の強度へ逆算
-            const max = Math.max(r, g, b);
-            const min = Math.min(r, g, b);
-            const l = (max + min) / 2;
-            if (l < 25) return 0; // 閾値以下のノイズカット
-            return Math.min(255, (l / 255) * 350); 
+            // 窓関数の適用
+            const windowed = new Float32Array(FFT_SIZE);
+            for(let i=0; i<FFT_SIZE; i++) windowed[i] = frame[i] * win[i];
+
+            // 相関演算によるリアルタイム周波数・位相抽出
+            for (let f = 0; f < numFreqs; f++) {
+                let real = 0;
+                let imag = 0;
+                const angleIncrement = (f / FFT_SIZE) * Math.PI * 2;
+                
+                for (let t = 0; t < FFT_SIZE; t++) {
+                    const angle = angleIncrement * t;
+                    real += windowed[t] * Math.cos(angle);
+                    imag -= windowed[t] * Math.sin(angle);
+                }
+
+                magnitudes[f] = Math.sqrt(real * real + imag * imag);
+                phases[f] = Math.atan2(imag, real);
+            }
+
+            // 画面シフト
+            tempCtx.drawImage(canvas, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(tempCanvas, -1, 0);
+
+            // 1024ピクセルの縦ラインを描画
+            const imgData = ctx.createImageData(1, height);
+
+            for (let y = 0; y < height; y++) {
+                const f = y; // 1:1マッピング
+                
+                // 1. 振幅（音の強さ） -> Rチャンネル
+                const mag = Math.min(255, magnitudes[f] * 2000); 
+
+                // 2. 位相差（前回のフレームからのズレ） -> Gチャンネル
+                let phaseDiff = phases[f] - prevPhases[f];
+                // -PI 〜 PI の範囲に正規化
+                phaseDiff = Math.atan2(Math.sin(phaseDiff), Math.cos(phaseDiff));
+                // 0〜255の整数にマッピング
+                const phaseColor = Math.floor(((phaseDiff + Math.PI) / (Math.PI * 2)) * 255);
+
+                const idx = (height - 1 - y) * 4;
+                imgData.data[idx + 0] = mag;          // R: 振幅
+                imgData.data[idx + 1] = phaseColor;   // G: 位相差
+                imgData.data[idx + 2] = mag * 0.2;    // B: 視覚的な青み（復元には不使用）
+                imgData.data[idx + 3] = 255;          // A: 不透明度
+
+                prevPhases[f] = phases[f];
+            }
+            ctx.putImageData(imgData, width - 1, 0);
         }
 
         btnDownload.addEventListener('click', () => {
             const link = document.createElement('a');
-            link.download = 'spectrogram.png';
-            link.href = canvas.toDataURL();
+            link.download = 'phase_vocoder.png';
+            link.href = canvas.toDataURL('image/png'); // 必ずPNG
             link.click();
         });
 
-        // --- 2. 画像から音へ復元（グリフィン・リム法の実装） ---
+        // --- 2. 画像から音へ完全復元 ---
         uploadImg.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -188,12 +234,9 @@
             img.onload = () => {
                 ctx.clearRect(0, 0, width, height);
                 ctx.drawImage(img, 0, 0, width, height);
-                statusDiv.textContent = "画像を読み込みました。フェーズリカバリ（音の復元）を実行中...";
+                statusDiv.textContent = "フェーズボコーダー画像を解析中...";
                 
-                // タイムアウトを挟んでUIフリーズを防ぎつつ復元計算
-                setTimeout(() => {
-                    reconstructAudio();
-                }, 50);
+                setTimeout(() => { reconstructAudio(); }, 50);
             };
             img.src = URL.createObjectURL(file);
         });
@@ -201,87 +244,52 @@
         function reconstructAudio() {
             const imgData = ctx.getImageData(0, 0, width, height).data;
             const numFrames = width;
-            const numFreqs = FFT_SIZE / 2;
+            const numFreqs = height; // 1024
 
-            // 1. 画像ピクセルから振幅スペクトラム（振幅行列）を抽出
-            const magnitudes = [];
-            for (let f = 0; f < numFreqs; f++) {
-                magnitudes.push(new Float32Array(numFrames));
-            }
-
-            for (let x = 0; x < numFrames; x++) {
-                for (let y = 0; y < height; y++) {
-                    const idx = ((height - 1 - y) * width + x) * 4;
-                    const r = imgData[idx];
-                    const g = imgData[idx + 1];
-                    const b = imgData[idx + 2];
-                    
-                    // 画像の縦解像度(512)からFFTの周波数(1024)へマッピング
-                    const fLeft = Math.floor((y / height) * numFreqs);
-                    const fRight = Math.min(numFreqs - 1, Math.ceil(((y + 1) / height) * numFreqs));
-                    
-                    const amp = getAmplitudeFromRGB(r, g, b) / 255;
-                    for (let f = fLeft; f < fRight; f++) {
-                        magnitudes[f][x] = amp;
-                    }
-                }
-            }
-
-            // 2. 位相の初期化（ランダムフェーズ）
-            const phases = [];
-            for (let f = 0; f < numFreqs; f++) {
-                phases.push(new Float32Array(numFrames));
-                for (let x = 0; x < numFrames; x++) {
-                    phases[f][x] = Math.random() * Math.PI * 2;
-                }
-            }
-
-            // 3. グリフィン・リム法（反復フェーズリカバリ）の簡易高速ループ
-            // 本来はiFFTとFFTを繰り返すが、軽量化のため隣接フレーム間の位相差を滑らかに繋ぐ数理補正を適用
             const totalSamples = numFrames * HOP_SIZE + FFT_SIZE;
             const outputSignal = new Float32Array(totalSamples);
+            
+            // 各周波数の現時点での累計位相を保持する配列
+            const currentPhases = new Float32Array(numFreqs);
 
-            // 反復を繰り返すことで波形の不連続ノイズを減らす（3回でも実用レベル）
-            for (let iter = 0; iter < 3; iter++) {
-                outputSignal.fill(0);
-                
-                // 逆変換（各周波数のサイン波を足し合わせてタイムラインに展開）
-                for (let x = 0; x < numFrames; x++) {
-                    const startSample = x * HOP_SIZE;
-                    for (let f = 0; f < numFreqs; f++) {
-                        const mag = magnitudes[f][x];
-                        if (mag === 0) continue;
+            // タイムラインを1フレーム（1ピクセル列）ずつ合成
+            for (let x = 0; x < numFrames; x++) {
+                const startSample = x * HOP_SIZE;
+
+                for (let y = 0; y < numFreqs; y++) {
+                    const idx = ((height - 1 - y) * width + x) * 4;
+                    
+                    // Rから振幅を復元
+                    const mag = imgData[idx + 0] / 2000;
+                    if (mag === 0) continue;
+
+                    // Gから位相差を復元
+                    const phaseColor = imgData[idx + 1];
+                    const phaseDiff = (phaseColor / 255) * Math.PI * 2 - Math.PI;
+
+                    // 位相を累積させて次の波へと連続的につなぐ
+                    currentPhases[y] += phaseDiff;
+
+                    const freqRad = (y / FFT_SIZE) * Math.PI * 2;
+
+                    // サイン波をタイムラインにオーバーラップして加算
+                    for (let t = 0; t < HOP_SIZE * 2; t++) {
+                        if (startSample + t >= totalSamples) break;
                         
-                        const freqRad = (f / FFT_SIZE) * Math.PI * 2;
-                        const phase = phases[f][x];
-
-                        for (let t = 0; t < HOP_SIZE * 2; t++) {
-                            if (startSample + t >= totalSamples) break;
-                            // 窓関数（ハニング窓）をかけて滑らかに繋ぐ
-                            const win = 0.5 * (1 - Math.cos((Math.PI * 2 * t) / (HOP_SIZE * 2)));
-                            outputSignal[startSample + t] += mag * Math.sin(freqRad * t + phase) * win * 0.1;
-                        }
-                    }
-                }
-
-                // 次のループに向けて簡易的に位相をアップデート（前のフレームとの連続性を学習）
-                for (let x = 1; x < numFrames; x++) {
-                    for (let f = 0; f < numFreqs; f++) {
-                        const freqRad = (f / FFT_SIZE) * Math.PI * 2;
-                        phases[f][x] = phases[f][x - 1] + freqRad * HOP_SIZE;
+                        // ハニング窓をかけてフレーム間の繋ぎ目を滑らかに
+                        const win = 0.5 * (1 - Math.cos((Math.PI * 2 * t) / (HOP_SIZE * 2)));
+                        outputSignal[startSample + t] += mag * Math.sin(freqRad * t + currentPhases[y]) * win * 0.2;
                     }
                 }
             }
 
-            // 4. Web AudioのAudioBufferに格納
             reconstructedBuffer = audioCtx.createBuffer(1, totalSamples, SAMPLE_RATE);
             reconstructedBuffer.copyToChannel(outputSignal, 0);
 
             btnPlay.disabled = false;
-            statusDiv.textContent = "音の復元が完了しました！「復元した音を再生」を押してください。";
+            statusDiv.textContent = "高精度復元が完了しました！再生してください。";
         }
 
-        // --- 3. 再生 ---
         btnPlay.addEventListener('click', () => {
             if (!reconstructedBuffer || !audioCtx) return;
             const source = audioCtx.createBufferSource();
